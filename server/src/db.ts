@@ -186,6 +186,41 @@ export function initDatabase() {
   `);
 
   seedVersion2Data();
+  configureDeploymentAdmin();
+}
+
+function configureDeploymentAdmin() {
+  const configuredEmail = process.env.BOOTSTRAP_ADMIN_EMAIL?.trim().toLowerCase();
+  const configuredPassword = process.env.BOOTSTRAP_ADMIN_PASSWORD;
+
+  if (!configuredEmail && !configuredPassword) return;
+  if (!configuredEmail || !configuredPassword) {
+    throw new Error('BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD must both be configured');
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(configuredEmail)) {
+    throw new Error('BOOTSTRAP_ADMIN_EMAIL must be a valid email address');
+  }
+  if (configuredPassword.length < 12) {
+    throw new Error('BOOTSTRAP_ADMIN_PASSWORD must contain at least 12 characters');
+  }
+
+  const existingUser = db.prepare('SELECT id FROM users WHERE lower(email) = ?').get(configuredEmail) as { id: string } | undefined;
+  const passwordHash = bcrypt.hashSync(configuredPassword, 12);
+
+  if (existingUser) {
+    db.prepare(`
+      UPDATE users
+      SET password_hash = ?, role = 'admin', active = 1, failed_logins = 0, locked_until = NULL
+      WHERE id = ?
+    `).run(passwordHash, existingUser.id);
+  } else {
+    db.prepare(`
+      INSERT INTO users (id, email, password_hash, role)
+      VALUES (?, ?, ?, 'admin')
+    `).run(uuidv4(), configuredEmail, passwordHash);
+  }
+
+  console.log('Deployment admin account configured from environment.');
 }
 
 function seedVersion2Data() {

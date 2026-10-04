@@ -31,6 +31,21 @@ npm run dev
 
 The client uses the API at `http://localhost:5000` by default (using the current hostname). For a different API origin, create `client/.env.local` and set `VITE_API_URL` to that origin, without a trailing slash.
 
+### Deployment Login Configuration
+
+For a deployed app, configure these variables in the **backend service**:
+
+```env
+BOOTSTRAP_ADMIN_EMAIL=admin@your-domain.com
+BOOTSTRAP_ADMIN_PASSWORD=<a-unique-password-of-at-least-12-characters>
+JWT_SECRET=<random-secret-of-at-least-32-characters>
+REFRESH_SECRET=<a-different-random-secret-of-at-least-32-characters>
+```
+
+The backend creates or synchronizes this admin account whenever it starts, including when the database already contains other users. The configured email and password are authoritative: changing the password in the hosting environment takes effect on the next restart. Do not use the demo password for a public deployment.
+
+In the **frontend build environment**, set `VITE_API_URL` to the backend's public origin, for example `https://api.your-domain.com` (no trailing slash), then rebuild/redeploy the frontend. Without this setting, the client assumes the API runs on the same hostname on port 5000, which is usually incorrect when frontend and backend are hosted separately.
+
 ---
 
 ## 👥 Demo Accounts & Roles
