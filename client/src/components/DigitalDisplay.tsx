@@ -19,7 +19,7 @@ import {
   Minus
 } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
-import type { BasketProduct } from '../types';
+import type { BasketProduct, Product } from '../types';
 import { api } from '../api';
 import { sound } from '../socket';
 import { ProductImage } from './ProductImage';
@@ -43,6 +43,8 @@ export const DigitalDisplay: React.FC<DigitalDisplayProps> = ({ onExitDisplay })
   const [currentScreen, setCurrentScreen] = useState<DisplayScreen>('welcome');
   const [basketId, setBasketId] = useState<string>('');
   const [basketItems, setBasketItems] = useState<BasketProduct[]>([]);
+  const [displayProducts, setDisplayProducts] = useState<Pick<Product, 'id' | 'name' | 'weight' | 'barcode' | 'photo_url' | 'mrp' | 'selling_price' | 'stock_count'>[]>([]);
+  const [loadingDisplayProducts, setLoadingDisplayProducts] = useState(false);
   const [latestProduct, setLatestProduct] = useState<BasketProduct | null>(null);
 
   // Scan feedback banner
@@ -84,9 +86,12 @@ export const DigitalDisplay: React.FC<DigitalDisplayProps> = ({ onExitDisplay })
   // 2. Start shopping session (DF-3)
   const handleStartShopping = async () => {
     try {
+      setLoadingDisplayProducts(true);
+      const products = await api.getDisplayProducts();
       const res = await api.createDisplayBasket();
       setBasketId(res.basketId);
       setBasketItems([]);
+      setDisplayProducts(products);
       setLatestProduct(null);
       setPhoneInput('');
       setStaffCode('');
@@ -98,6 +103,8 @@ export const DigitalDisplay: React.FC<DigitalDisplayProps> = ({ onExitDisplay })
         type: 'error',
         message: error instanceof Error ? error.message : 'Unable to start shopping. Please try again.'
       });
+    } finally {
+      setLoadingDisplayProducts(false);
     }
   };
 
@@ -137,6 +144,11 @@ export const DigitalDisplay: React.FC<DigitalDisplayProps> = ({ onExitDisplay })
         sound.playScanSuccess();
         const p = res.product;
         setLatestProduct(p);
+        setDisplayProducts(prev => prev.map(product =>
+          product.barcode === p.barcode
+            ? { ...product, stock_count: Math.max(0, product.stock_count - 1) }
+            : product
+        ));
 
         setBasketItems(prev => {
           const existingIndex = prev.findIndex(item => item.barcode === p.barcode);
@@ -170,6 +182,11 @@ export const DigitalDisplay: React.FC<DigitalDisplayProps> = ({ onExitDisplay })
   const handleRemoveDisplayItem = async (item: BasketProduct) => {
     try {
       await api.removeDisplayItem(basketId, item.barcode);
+      setDisplayProducts(prev => prev.map(product =>
+        product.barcode === item.barcode
+          ? { ...product, stock_count: product.stock_count + 1 }
+          : product
+      ));
       setBasketItems(prev => prev
         .map(current => current.barcode === item.barcode
           ? { ...current, quantity: current.quantity - 1 }
@@ -371,15 +388,6 @@ export const DigitalDisplay: React.FC<DigitalDisplayProps> = ({ onExitDisplay })
     setPhoneInput(prev => prev.slice(0, -1));
   };
 
-  // Sample quick barcodes for convenient 1-click testing
-  const sampleQuickBarcodes = [
-    { name: 'Basmati Rice', code: '8901234500101' },
-    { name: 'Amul Butter', code: '8901234500201' },
-    { name: 'Tata Salt', code: '8901234500301' },
-    { name: 'Maggi Noodles', code: '8901234500401' },
-    { name: 'Fortune Oil', code: '8901234500501' }
-  ];
-
   return (
     <div className="fixed inset-0 z-50 bg-[#F3F7F7] select-none flex flex-col font-sans overflow-hidden">
       
@@ -458,10 +466,11 @@ export const DigitalDisplay: React.FC<DigitalDisplayProps> = ({ onExitDisplay })
 
             <button
               onClick={handleStartShopping}
-              className="w-full sm:w-auto px-10 py-5 rounded-2xl bg-gradient-to-r from-amber-400 via-amber-500 to-amber-600 hover:opacity-95 text-teal-950 font-black text-xl shadow-xl shadow-amber-500/20 flex items-center justify-center gap-3 transition-all transform active:scale-95"
+            disabled={loadingDisplayProducts}
+            className="w-full sm:w-auto px-10 py-5 rounded-2xl bg-gradient-to-r from-amber-400 via-amber-500 to-amber-600 hover:opacity-95 text-teal-950 font-black text-xl shadow-xl shadow-amber-500/20 flex items-center justify-center gap-3 transition-all transform active:scale-95"
             >
-              <span>Yes, Start Shopping</span>
-              <ArrowRight className="w-6 h-6 stroke-[3]" />
+              <span>{loadingDisplayProducts ? 'Loading products...' : 'Yes, Start Shopping'}</span>
+              {!loadingDisplayProducts && <ArrowRight className="w-6 h-6 stroke-[3]" />}
             </button>
 
           </div>
@@ -606,21 +615,38 @@ export const DigitalDisplay: React.FC<DigitalDisplayProps> = ({ onExitDisplay })
                 </button>
               </form>
 
-              {/* Convenience 1-Click Barcode Test Buttons for Demo */}
               <div className="w-full pt-3 border-t border-gray-100">
-                <span className="text-[10px] font-bold uppercase text-gray-400 block mb-2 text-center">
-                  Quick Tap to Simulate Barcode Scan
-                </span>
-                <div className="flex flex-wrap gap-1.5 justify-center">
-                  {sampleQuickBarcodes.map(item => (
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-black uppercase text-gray-500">Tap a product to add</span>
+                  <span className="text-[10px] text-gray-400">{displayProducts.length} products</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto pr-1">
+                  {displayProducts.map(product => (
                     <button
-                      key={item.code}
-                      onClick={() => handleDisplayScan(item.code, true)}
-                      className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-teal-50 text-teal-800 border border-teal-200 hover:bg-teal-100 active:scale-95 transition-all"
+                      key={product.id}
+                      type="button"
+                      disabled={product.stock_count === 0}
+                      onClick={() => void handleDisplayScan(product.barcode, true)}
+                      className="min-w-0 flex items-center gap-2 rounded-xl border border-gray-200 bg-white p-2 text-left transition-colors hover:border-teal-500 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      + {item.name}
+                      <ProductImage
+                        src={product.photo_url}
+                        alt={product.name}
+                        className="h-12 w-12 shrink-0 rounded-lg border border-gray-100 object-cover"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-xs font-bold text-gray-900">{product.name}</span>
+                        <span className="block text-sm font-black text-teal-800">₹{product.selling_price}</span>
+                        <span className="block text-[10px] text-gray-400">
+                          {product.stock_count > 0 ? `${product.stock_count} in stock` : 'Out of stock'}
+                        </span>
+                      </span>
+                      {product.stock_count > 0 && <Plus className="h-4 w-4 shrink-0 text-teal-700" />}
                     </button>
                   ))}
+                  {displayProducts.length === 0 && (
+                    <p className="col-span-2 py-4 text-center text-xs text-gray-400">No products are available.</p>
+                  )}
                 </div>
               </div>
 

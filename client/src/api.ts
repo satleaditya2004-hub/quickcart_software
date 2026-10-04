@@ -225,6 +225,13 @@ export const api = {
 
   // ================= DIGITAL DISPLAY API ================= //
 
+  async getDisplayProducts(): Promise<Pick<Product, 'id' | 'name' | 'weight' | 'barcode' | 'photo_url' | 'mrp' | 'selling_price' | 'stock_count'>[]> {
+    const data = await request<{
+      products: Pick<Product, 'id' | 'name' | 'weight' | 'barcode' | 'photo_url' | 'mrp' | 'selling_price' | 'stock_count'>[];
+    }>('/display/products');
+    return data.products;
+  },
+
   async createDisplayBasket(displayId?: string): Promise<{ basketId: string; displayId: string; status: string }> {
     return request<{ basketId: string; displayId: string; status: string }>('/display/baskets', {
       method: 'POST',

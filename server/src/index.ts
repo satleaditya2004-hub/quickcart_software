@@ -700,6 +700,26 @@ app.post('/analysis/ai', requireAuth, async (req: AuthenticatedRequest, res) => 
 // ==================== DIGITAL DISPLAY API (Kiosk Touch) =================== //
 // ========================================================================= //
 
+app.get('/display/products', (_req, res) => {
+  const products = db.prepare(`
+    SELECT
+      p.id,
+      p.name,
+      p.weight,
+      p.barcode,
+      p.photo_url,
+      p.mrp,
+      p.selling_price,
+      COUNT(u.id) AS stock_count
+    FROM products p
+    LEFT JOIN units u ON u.product_id = p.id AND u.status = 'instock'
+    WHERE p.deleted_at IS NULL
+    GROUP BY p.id
+    ORDER BY p.name COLLATE NOCASE
+  `).all();
+  return res.json({ products });
+});
+
 // 1. Start a basket session when customer taps "Are you ready for shopping?" (DF-2, DF-3)
 app.post('/display/baskets', (req, res) => {
   const defaultDisplay = db.prepare('SELECT id FROM displays LIMIT 1').get() as { id: string } | undefined;
