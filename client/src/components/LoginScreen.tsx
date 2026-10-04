@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ShoppingCart, Lock, Mail, ArrowRight, ShieldCheck, Zap, BarChart3, AlertCircle, MonitorPlay } from 'lucide-react';
+import { ShoppingCart, Lock, Mail, ArrowRight, ShieldCheck, BarChart3, AlertCircle, MonitorPlay } from 'lucide-react';
 import { api } from '../api';
 import type { User, Role } from '../types';
 
@@ -16,7 +16,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, onOpen
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email || !password) {
+    if (!email.trim() || !password) {
       setError('Email or password is incorrect.');
       return;
     }
@@ -24,10 +24,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, onOpen
     try {
       setLoading(true);
       setError(null);
-      const res = await api.login(email, password);
+      const res = await api.login(email.trim(), password);
       onLoginSuccess(res.user);
-    } catch (err: any) {
-      setError('Email or password is incorrect.');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Email or password is incorrect.');
       setPassword('');
     } finally {
       setLoading(false);

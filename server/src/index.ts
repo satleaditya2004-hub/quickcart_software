@@ -18,6 +18,8 @@ import {
 } from './db.js';
 import { 
   generateTokens, 
+  hashRefreshToken,
+  matchesRefreshToken,
   verifyRefreshToken, 
   requireAuth, 
   requireRole, 
@@ -60,11 +62,11 @@ function notifyClients(event: string, payload: any) {
 app.post('/auth/login', (req, res) => {
   const { email, password } = req.body;
 
-  if (!email || !password) {
+  if (typeof email !== 'string' || !email.trim() || typeof password !== 'string' || !password) {
     return res.status(400).json({ error: 'Email and password are required' });
   }
 
-  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email.trim().toLowerCase()) as any;
+  const user = db.prepare('SELECT * FROM users WHERE email = ? AND active = 1').get(email.trim().toLowerCase()) as any;
 
   if (!user) {
     return res.status(401).json({ error: 'Email or password is incorrect.' });
@@ -97,10 +99,10 @@ app.post('/auth/login', (req, res) => {
     role: user.role 
   });
 
-  const tokenHash = bcrypt.hashSync(tokens.refreshToken, 8);
+  const tokenHash = hashRefreshToken(tokens.refreshToken);
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
   db.prepare('INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)').run(
-    uuidv4(),
+    tokens.sessionId,
     user.id,
     tokenHash,
     expiresAt
@@ -120,7 +122,7 @@ app.post('/auth/login', (req, res) => {
 
 app.post('/auth/refresh', (req, res) => {
   const { refreshToken } = req.body;
-  if (!refreshToken) {
+  if (typeof refreshToken !== 'string' || !refreshToken) {
     return res.status(400).json({ error: 'Refresh token is required' });
   }
 
@@ -129,12 +131,27 @@ app.post('/auth/refresh', (req, res) => {
     return res.status(401).json({ error: 'Invalid or expired refresh token' });
   }
 
-  const user = db.prepare('SELECT id, staff_code, email, role FROM users WHERE id = ?').get(payload.id) as any;
+  const session = db.prepare(`
+    SELECT id, token_hash, expires_at
+    FROM refresh_tokens
+    WHERE id = ? AND user_id = ? AND revoked_at IS NULL
+  `).get(payload.sessionId, payload.id) as { id: string; token_hash: string; expires_at: string } | undefined;
+  if (!session || Date.parse(session.expires_at) <= Date.now() || !matchesRefreshToken(refreshToken, session.token_hash)) {
+    return res.status(401).json({ error: 'Invalid or expired refresh token' });
+  }
+
+  const user = db.prepare('SELECT id, staff_code, email, role FROM users WHERE id = ? AND active = 1').get(payload.id) as any;
   if (!user) {
     return res.status(401).json({ error: 'User not found' });
   }
 
-  const newTokens = generateTokens(user);
+  const newTokens = generateTokens(user, session.id);
+  const newExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  db.prepare('UPDATE refresh_tokens SET token_hash = ?, expires_at = ? WHERE id = ?').run(
+    hashRefreshToken(newTokens.refreshToken),
+    newExpiresAt,
+    session.id
+  );
   return res.json({
     accessToken: newTokens.accessToken,
     refreshToken: newTokens.refreshToken,
@@ -143,6 +160,18 @@ app.post('/auth/refresh', (req, res) => {
 });
 
 app.post('/auth/logout', (req, res) => {
+  const refreshToken = typeof req.body?.refreshToken === 'string' ? req.body.refreshToken : null;
+  const payload = refreshToken ? verifyRefreshToken(refreshToken) : null;
+  if (payload && refreshToken) {
+    const session = db.prepare(`
+      SELECT id, token_hash
+      FROM refresh_tokens
+      WHERE id = ? AND user_id = ? AND revoked_at IS NULL
+    `).get(payload.sessionId, payload.id) as { id: string; token_hash: string } | undefined;
+    if (session && matchesRefreshToken(refreshToken, session.token_hash)) {
+      db.prepare('UPDATE refresh_tokens SET revoked_at = ? WHERE id = ?').run(new Date().toISOString(), session.id);
+    }
+  }
   return res.json({ success: true, message: 'Logged out successfully' });
 });
 
@@ -157,14 +186,15 @@ app.get('/products', requireAuth, (req, res) => {
 app.post('/products', requireAuth, requireRole('admin', 'staff'), (req: AuthenticatedRequest, res) => {
   const { name, weight, barcode, photo_url, mrp, selling_price, manufacture_date, expiry_date } = req.body;
 
-  if (!name || !barcode || !photo_url || mrp === undefined || selling_price === undefined || !expiry_date) {
-    return res.status(400).json({ error: 'Name, Barcode, Photo URL, MRP, Selling Price, and Expiry Date are required' });
+  if (typeof name !== 'string' || !name.trim() || typeof barcode !== 'string' || !barcode.trim() ||
+      mrp === undefined || selling_price === undefined || typeof expiry_date !== 'string' || !expiry_date) {
+    return res.status(400).json({ error: 'Name, Barcode, MRP, Selling Price, and Expiry Date are required' });
   }
 
   const numMrp = Number(mrp);
   const numSp = Number(selling_price);
 
-  if (isNaN(numMrp) || isNaN(numSp) || numMrp < 0 || numSp < 0) {
+  if (!Number.isFinite(numMrp) || !Number.isFinite(numSp) || numMrp < 0 || numSp < 0) {
     return res.status(400).json({ error: 'MRP and Selling Price must be valid non-negative numbers' });
   }
 
@@ -193,7 +223,7 @@ app.post('/products', requireAuth, requireRole('admin', 'staff'), (req: Authenti
     name.trim(),
     weight?.trim() || null,
     barcode.trim(),
-    photo_url.trim(),
+    typeof photo_url === 'string' ? photo_url.trim() : '',
     numMrp,
     numSp,
     manufacture_date || null,
@@ -210,7 +240,10 @@ app.post('/products', requireAuth, requireRole('admin', 'staff'), (req: Authenti
 });
 
 app.put('/products/:id', requireAuth, requireRole('admin', 'staff'), (req, res) => {
-  const { id } = req.params;
+  const id = req.params.id;
+  if (typeof id !== 'string') {
+    return res.status(400).json({ error: 'Product ID is required' });
+  }
   const { name, weight, barcode, photo_url, mrp, selling_price, manufacture_date, expiry_date } = req.body;
 
   const existing = getProductById(id);
@@ -221,7 +254,7 @@ app.put('/products/:id', requireAuth, requireRole('admin', 'staff'), (req, res) 
   const numMrp = Number(mrp);
   const numSp = Number(selling_price);
 
-  if (isNaN(numMrp) || isNaN(numSp) || numMrp < 0 || numSp < 0) {
+  if (!Number.isFinite(numMrp) || !Number.isFinite(numSp) || numMrp < 0 || numSp < 0) {
     return res.status(400).json({ error: 'MRP and Selling Price must be valid non-negative numbers' });
   }
 
@@ -251,7 +284,7 @@ app.put('/products/:id', requireAuth, requireRole('admin', 'staff'), (req, res) 
     name.trim(),
     weight?.trim() || null,
     barcode ? barcode.trim() : existing.barcode,
-    photo_url ? photo_url.trim() : existing.photo_url,
+    typeof photo_url === 'string' ? photo_url.trim() : existing.photo_url,
     numMrp,
     numSp,
     manufacture_date || null,
@@ -266,7 +299,11 @@ app.put('/products/:id', requireAuth, requireRole('admin', 'staff'), (req, res) 
 });
 
 app.get('/products/:id', requireAuth, (req, res) => {
-  const product = getProductById(req.params.id);
+  const id = req.params.id;
+  if (typeof id !== 'string') {
+    return res.status(400).json({ error: 'Product ID is required' });
+  }
+  const product = getProductById(id);
   if (!product) {
     return res.status(404).json({ error: 'Product not found' });
   }
@@ -351,6 +388,55 @@ app.post('/stock-in', requireAuth, requireRole('staff'), (req: AuthenticatedRequ
   notifyClients('stock:low', { count: lowStock.length, items: lowStock });
 
   return res.status(201).json({ unit: newUnit });
+});
+
+// Checkout one available unit, choosing the earliest expiry first.
+app.post('/checkout', requireAuth, requireRole('admin', 'staff'), (req, res) => {
+  const barcode = typeof req.body.barcode === 'string' ? req.body.barcode.trim() : '';
+  if (!barcode) {
+    return res.status(400).json({ error: 'Barcode is required' });
+  }
+
+  const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const soldUnit = db.transaction(() => {
+    const candidate = db.prepare(`
+      SELECT u.id, u.product_id, u.barcode, u.price_snapshot, p.name AS product_name
+      FROM units u
+      JOIN products p ON p.id = u.product_id
+      WHERE u.barcode = ? AND u.status = 'instock' AND p.deleted_at IS NULL
+      ORDER BY u.expiry_snapshot ASC, u.scanned_at ASC
+      LIMIT 1
+    `).get(barcode) as {
+      id: string;
+      product_id: string;
+      barcode: string;
+      price_snapshot: number;
+      product_name: string;
+    } | undefined;
+
+    if (!candidate) return null;
+    const updated = db.prepare(`
+      UPDATE units SET status = 'sold', sold_at = ?
+      WHERE id = ? AND status = 'instock'
+    `).run(now, candidate.id);
+    return updated.changes === 1 ? candidate : null;
+  })();
+
+  if (!soldUnit) {
+    return res.status(409).json({ error: 'Barcode is not in stock or has already been sold' });
+  }
+
+  const currentProduct = getProductById(soldUnit.product_id);
+  const record = {
+    id: soldUnit.id,
+    barcode: soldUnit.barcode,
+    product_name: soldUnit.product_name,
+    selling_price_snapshot: soldUnit.price_snapshot
+  };
+  const currentStock = currentProduct?.stock_count ?? 0;
+  notifyClients('sale:completed', { record, current_stock: currentStock });
+  notifyClients('unit:sold', { product_id: soldUnit.product_id, current_stock: currentStock });
+  return res.json({ record, current_stock: currentStock });
 });
 
 // ----------------- SCAN FEED (Live reads from digital displays) (MF-9) ----------------- //
@@ -616,8 +702,19 @@ app.post('/analysis/ai', requireAuth, async (req: AuthenticatedRequest, res) => 
 
 // 1. Start a basket session when customer taps "Are you ready for shopping?" (DF-2, DF-3)
 app.post('/display/baskets', (req, res) => {
-  const defaultDisplay = db.prepare('SELECT id FROM displays LIMIT 1').get() as { id: string };
-  const displayId = (req.body.displayId as string) || defaultDisplay.id;
+  const defaultDisplay = db.prepare('SELECT id FROM displays LIMIT 1').get() as { id: string } | undefined;
+  if (!defaultDisplay) {
+    return res.status(503).json({ error: 'No display is configured' });
+  }
+  const requestedDisplayId = req.body?.displayId;
+  if (requestedDisplayId !== undefined && typeof requestedDisplayId !== 'string') {
+    return res.status(400).json({ error: 'Display ID must be a string' });
+  }
+  const displayId = requestedDisplayId || defaultDisplay.id;
+  const display = db.prepare('SELECT id FROM displays WHERE id = ? AND active = 1').get(displayId);
+  if (!display) {
+    return res.status(400).json({ error: 'Display is not configured or is inactive' });
+  }
   const basketId = uuidv4();
   const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
 
@@ -637,13 +734,15 @@ app.post('/display/baskets', (req, res) => {
 app.post('/display/scan', (req, res) => {
   const { barcode, basketId } = req.body;
 
-  if (!barcode || !basketId) {
+  if (typeof barcode !== 'string' || !barcode.trim() || typeof basketId !== 'string' || !basketId.trim()) {
     return res.status(400).json({ error: 'Barcode and basketId are required' });
   }
 
-  const defaultDisplay = db.prepare('SELECT id FROM displays LIMIT 1').get() as { id: string };
   const basket = db.prepare('SELECT * FROM baskets WHERE id = ?').get(basketId) as any;
-  const displayId = basket ? basket.display_id : defaultDisplay.id;
+  if (!basket || basket.status !== 'open') {
+    return res.status(409).json({ error: 'Shopping basket is not open' });
+  }
+  const displayId = basket.display_id;
 
   const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
   const scanId = uuidv4();
@@ -777,6 +876,11 @@ app.post('/display/scan', (req, res) => {
 app.delete('/display/baskets/:id/items/:barcode', (req, res) => {
   const basketId = req.params.id;
   const barcode = req.params.barcode;
+  if (typeof basketId !== 'string' || typeof barcode !== 'string') {
+    return res.status(400).json({ error: 'Basket ID and barcode are required' });
+  }
+  const basket = db.prepare("SELECT id FROM baskets WHERE id = ? AND status = 'open'").get(basketId);
+  if (!basket) return res.status(404).json({ error: 'Open basket not found' });
 
   const product = getProductByBarcode(barcode);
   if (!product) return res.status(404).json({ error: 'Product not found' });
@@ -789,6 +893,9 @@ app.delete('/display/baskets/:id/items/:barcode', (req, res) => {
     LIMIT 1
   `).get(basketId, product.id) as { id: string } | undefined;
 
+  if (!unit) {
+    return res.status(404).json({ error: 'No matching item remains in this basket' });
+  }
   if (unit) {
     db.prepare(`
       UPDATE units
@@ -804,6 +911,9 @@ app.delete('/display/baskets/:id/items/:barcode', (req, res) => {
 // 4. End Shopping: Cancels basket and releases all items back to stock (DF-10, D8)
 app.post('/display/baskets/:id/cancel', (req, res) => {
   const basketId = req.params.id;
+  if (typeof basketId !== 'string') {
+    return res.status(400).json({ error: 'Basket ID is required' });
+  }
 
   db.transaction(() => {
     // Release all reserved units
@@ -827,19 +937,31 @@ app.post('/display/baskets/:id/cancel', (req, res) => {
 // 5. Enter Customer Mobile Number (DF-11)
 app.post('/display/baskets/:id/phone', (req, res) => {
   const basketId = req.params.id;
-  const { phone } = req.body;
+  if (typeof basketId !== 'string') {
+    return res.status(400).json({ error: 'Basket ID is required' });
+  }
+  const phone = req.body?.phone;
 
-  if (!phone || phone.trim().length < 8) {
+  if (typeof phone !== 'string' || phone.trim().length < 8) {
     return res.status(400).json({ error: 'Please enter a valid mobile number for your WhatsApp receipt.' });
   }
 
-  db.prepare(`UPDATE baskets SET phone = ?, status = 'paying' WHERE id = ?`).run(phone.trim(), basketId);
+  const updated = db.prepare(`
+    UPDATE baskets SET phone = ?, status = 'paying'
+    WHERE id = ? AND status = 'open'
+  `).run(phone.trim(), basketId);
+  if (updated.changes === 0) {
+    return res.status(404).json({ error: 'Open basket not found' });
+  }
   return res.json({ success: true, phone: phone.trim() });
 });
 
 // 6. Complete Online Payment (Card / UPI) (DF-12, DF-14, 3.5)
 app.post('/display/baskets/:id/pay', (req, res) => {
   const basketId = req.params.id;
+  if (typeof basketId !== 'string') {
+    return res.status(400).json({ error: 'Basket ID is required' });
+  }
   const { paymentMethod } = req.body; // 'card' | 'upi'
 
   if (!['card', 'upi'].includes(paymentMethod)) {
@@ -848,6 +970,9 @@ app.post('/display/baskets/:id/pay', (req, res) => {
 
   const basket = db.prepare('SELECT * FROM baskets WHERE id = ?').get(basketId) as any;
   if (!basket) return res.status(404).json({ error: 'Basket not found' });
+  if (basket.status !== 'paying' && basket.status !== 'open') {
+    return res.status(409).json({ error: 'Basket is no longer available for payment' });
+  }
 
   // Get all reserved units
   const reservedUnits = db.prepare(`
@@ -934,9 +1059,13 @@ app.post('/display/baskets/:id/pay', (req, res) => {
 // 7. Staff Cash Approval for Display (DF-13, 3.5, 3.6)
 app.post('/display/baskets/:id/cash-approval', (req, res) => {
   const basketId = req.params.id;
-  const { staffCode, password } = req.body;
+  if (typeof basketId !== 'string') {
+    return res.status(400).json({ error: 'Basket ID is required' });
+  }
+  const staffCode = req.body?.staffCode;
+  const password = req.body?.password;
 
-  if (!staffCode || !password) {
+  if (typeof staffCode !== 'string' || !staffCode.trim() || typeof password !== 'string' || !password) {
     return res.status(400).json({ error: 'Mall Staff ID and Password are required' });
   }
 
@@ -953,6 +1082,9 @@ app.post('/display/baskets/:id/cash-approval', (req, res) => {
 
   const basket = db.prepare('SELECT * FROM baskets WHERE id = ?').get(basketId) as any;
   if (!basket) return res.status(404).json({ error: 'Basket not found' });
+  if (basket.status !== 'paying' && basket.status !== 'open') {
+    return res.status(409).json({ error: 'Basket is no longer available for payment' });
+  }
 
   const reservedUnits = db.prepare(`
     SELECT u.*, p.name as product_name
@@ -982,7 +1114,7 @@ app.post('/display/baskets/:id/cash-approval', (req, res) => {
     db.prepare(`
       INSERT INTO purchases (
         id, bill_no, basket_id, display_id, customer_phone, total, payment_method, approved_by, receipt_status, paid_at
-      ) VALUES (?, ?, ?, ?, ?, 'cash', ?, 'sent', ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, 'cash', ?, 'sent', ?)
     `).run(
       purchaseId,
       billNo,

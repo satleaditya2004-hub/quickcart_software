@@ -1,6 +1,7 @@
 import { io, Socket } from 'socket.io-client';
 
-const SOCKET_URL = 'http://localhost:5000';
+const SOCKET_URL = import.meta.env.VITE_API_URL ||
+  `${window.location.protocol}//${window.location.hostname}:5000`;
 
 export const socket: Socket = io(SOCKET_URL, {
   autoConnect: true,
@@ -43,7 +44,7 @@ class AudioFeedback {
 
       osc.start();
       osc.stop(this.ctx.currentTime + 0.08);
-    } catch (e) {
+    } catch {
       // Audio autoplay policy
     }
   }
@@ -75,7 +76,7 @@ class AudioFeedback {
       osc1.stop(now + 0.08);
       osc2.start(now + 0.08);
       osc2.stop(now + 0.25);
-    } catch (e) {
+    } catch {
       // Audio autoplay policy
     }
   }
@@ -98,7 +99,7 @@ class AudioFeedback {
 
       osc.start();
       osc.stop(this.ctx.currentTime + 0.22);
-    } catch (e) {
+    } catch {
       // Audio autoplay policy
     }
   }

@@ -88,12 +88,14 @@ export const DataTab: React.FC = () => {
     const handleUnitsReleased = () => refreshSelectedProduct();
 
     socket.on('unit:stocked', handleUnitChanged);
+    socket.on('unit:sold', handleUnitChanged);
     socket.on('unit:reserved', handleUnitChanged);
     socket.on('purchase:completed', handlePurchaseCompleted);
     socket.on('units:released', handleUnitsReleased);
 
     return () => {
       socket.off('unit:stocked', handleUnitChanged);
+      socket.off('unit:sold', handleUnitChanged);
       socket.off('unit:reserved', handleUnitChanged);
       socket.off('purchase:completed', handlePurchaseCompleted);
       socket.off('units:released', handleUnitsReleased);

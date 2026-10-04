@@ -12,11 +12,36 @@ import { SellTab } from './components/SellTab';
 import { AnalysisTab } from './components/AnalysisTab';
 import { CustomersTab } from './components/CustomersTab';
 import { DigitalDisplay } from './components/DigitalDisplay';
+import { api } from './api';
+
+function readStoredUser(): User | null {
+  const storedUser = localStorage.getItem('quickkart_user');
+  const storedToken = localStorage.getItem('quickkart_access_token');
+  if (storedUser && storedToken) {
+    try {
+      const parsed = JSON.parse(storedUser) as User;
+      if (
+        typeof parsed.id === 'string' &&
+        typeof parsed.email === 'string' &&
+        (parsed.role === 'admin' || parsed.role === 'staff')
+      ) {
+        return parsed;
+      }
+    } catch {
+      // Clear malformed persisted session data below.
+    }
+  }
+
+  localStorage.removeItem('quickkart_access_token');
+  localStorage.removeItem('quickkart_refresh_token');
+  localStorage.removeItem('quickkart_user');
+  return null;
+}
 
 export function App() {
   const [hasSplashed, setHasSplashed] = useState(false);
-  const [user, setUser] = useState<User | null>(null);
-  const [activeTab, setActiveTab] = useState<TabType>('list');
+  const [user, setUser] = useState<User | null>(readStoredUser);
+  const [activeTab, setActiveTab] = useState<TabType>(() => user?.role === 'staff' ? 'scan' : 'list');
   const [isDark, setIsDark] = useState<boolean>(() => {
     return localStorage.getItem('quickkart_dark') === 'true' ||
       window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -29,23 +54,6 @@ export function App() {
 
   // Check stored user session on mount
   useEffect(() => {
-    const storedUser = localStorage.getItem('quickkart_user');
-    const storedToken = localStorage.getItem('quickkart_access_token');
-    if (storedUser && storedToken) {
-      try {
-        const parsed = JSON.parse(storedUser);
-        setUser(parsed);
-        // Admin defaults to list, Staff defaults to scan
-        if (parsed.role === 'staff') {
-          setActiveTab('scan');
-        } else {
-          setActiveTab('list');
-        }
-      } catch (e) {
-        localStorage.removeItem('quickkart_user');
-      }
-    }
-
     const handleAuthChange = () => {
       const u = localStorage.getItem('quickkart_user');
       if (!u) setUser(null);
@@ -84,10 +92,10 @@ export function App() {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('quickkart_access_token');
-    localStorage.removeItem('quickkart_refresh_token');
-    localStorage.removeItem('quickkart_user');
     setUser(null);
+    void api.logout().catch((error: unknown) => {
+      console.error('Unable to revoke QuickKart server session:', error);
+    });
   };
 
   const handleOpenDisplay = () => {

@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   ShoppingCart, 
   Sparkles, 
   ArrowRight, 
-  Trash2, 
   CreditCard, 
   Smartphone, 
   Banknote, 
@@ -13,12 +12,8 @@ import {
   AlertCircle, 
   RotateCcw, 
   X, 
-  Lock, 
   Phone,
-  HelpCircle,
-  Monitor,
   Check,
-  ChevronRight,
   ShieldCheck,
   Plus,
   Minus
@@ -27,6 +22,7 @@ import { Html5Qrcode } from 'html5-qrcode';
 import type { BasketProduct } from '../types';
 import { api } from '../api';
 import { sound } from '../socket';
+import { ProductImage } from './ProductImage';
 
 interface DigitalDisplayProps {
   onExitDisplay?: () => void;
@@ -92,23 +88,29 @@ export const DigitalDisplay: React.FC<DigitalDisplayProps> = ({ onExitDisplay })
       setBasketId(res.basketId);
       setBasketItems([]);
       setLatestProduct(null);
+      setPhoneInput('');
+      setStaffCode('');
+      setStaffPassword('');
       setFeedback(null);
       setCurrentScreen('shopping');
-    } catch (e) {
-      setCurrentScreen('shopping');
+    } catch (error) {
+      setFeedback({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Unable to start shopping. Please try again.'
+      });
     }
   };
 
   // 3. Scan barcode on digital display (DF-4, DF-5, DF-7, DF-8)
-  const handleDisplayScan = async (barcode: string) => {
+  const handleDisplayScan = useCallback(async (barcode: string, manual = false) => {
     const code = barcode.trim();
     if (!code || !basketId) return;
 
     const now = Date.now();
-    if (now - lastScanTimeRef.current < 1000) {
+    if (!manual && now - lastScanTimeRef.current < 1000) {
       return; // 1 second debounce
     }
-    lastScanTimeRef.current = now;
+    if (!manual) lastScanTimeRef.current = now;
 
     try {
       const res = await api.scanDisplayBarcode(code, basketId);
@@ -163,6 +165,23 @@ export const DigitalDisplay: React.FC<DigitalDisplayProps> = ({ onExitDisplay })
     } finally {
       if (barcodeInputRef.current) barcodeInputRef.current.focus();
     }
+  }, [basketId]);
+
+  const handleRemoveDisplayItem = async (item: BasketProduct) => {
+    try {
+      await api.removeDisplayItem(basketId, item.barcode);
+      setBasketItems(prev => prev
+        .map(current => current.barcode === item.barcode
+          ? { ...current, quantity: current.quantity - 1 }
+          : current)
+        .filter(current => current.quantity > 0));
+    } catch (error) {
+      sound.playError();
+      setFeedback({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Unable to remove this item. Please try again.'
+      });
+    }
   };
 
   // Keyboard wedge listener for physical scanner gun on kiosk
@@ -196,7 +215,7 @@ export const DigitalDisplay: React.FC<DigitalDisplayProps> = ({ onExitDisplay })
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [currentScreen, basketId]);
+  }, [currentScreen, basketId, handleDisplayScan]);
 
   // Camera toggle for customer scan
   const toggleCamera = async () => {
@@ -220,7 +239,8 @@ export const DigitalDisplay: React.FC<DigitalDisplayProps> = ({ onExitDisplay })
             },
             () => {}
           );
-        } catch (err) {
+        } catch {
+          setFeedback({ type: 'error', message: 'Unable to access the camera. Check browser permissions.' });
           setIsCameraActive(false);
         }
       }, 200);
@@ -240,12 +260,17 @@ export const DigitalDisplay: React.FC<DigitalDisplayProps> = ({ onExitDisplay })
     if (basketId) {
       try {
         await api.cancelDisplayBasket(basketId);
-      } catch (e) {
-        // ignore
+      } catch (error) {
+        setFeedback({
+          type: 'error',
+          message: error instanceof Error ? error.message : 'Unable to cancel this basket. Please try again.'
+        });
+        return;
       }
     }
     setBasketItems([]);
     setLatestProduct(null);
+    setBasketId('');
     setCurrentScreen('welcome');
   };
 
@@ -425,6 +450,12 @@ export const DigitalDisplay: React.FC<DigitalDisplayProps> = ({ onExitDisplay })
               Scan your items on this display, review your basket in real time, and pay with Card, UPI, or Cash.
             </p>
 
+            {feedback && (
+              <p role="alert" className="mb-4 text-sm font-semibold text-red-200">
+                {feedback.message}
+              </p>
+            )}
+
             <button
               onClick={handleStartShopping}
               className="w-full sm:w-auto px-10 py-5 rounded-2xl bg-gradient-to-r from-amber-400 via-amber-500 to-amber-600 hover:opacity-95 text-teal-950 font-black text-xl shadow-xl shadow-amber-500/20 flex items-center justify-center gap-3 transition-all transform active:scale-95"
@@ -514,13 +545,10 @@ export const DigitalDisplay: React.FC<DigitalDisplayProps> = ({ onExitDisplay })
                       
                       {/* Rotating Pedestal Frame */}
                       <div className="w-64 h-64 rounded-full p-2 bg-gradient-to-b from-teal-50 to-teal-100 border border-teal-200 shadow-xl flex items-center justify-center relative">
-                        <img
+                        <ProductImage
                           src={latestProduct.photo_url}
                           alt={latestProduct.name}
                           className="w-52 h-52 object-contain rounded-2xl drop-shadow-2xl transition-transform duration-1000 animate-[spin_12s_linear_infinite]"
-                          onError={(e) => {
-                            (e.target as any).src = 'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=300&q=80';
-                          }}
                         />
                       </div>
                     </div>
@@ -554,6 +582,30 @@ export const DigitalDisplay: React.FC<DigitalDisplayProps> = ({ onExitDisplay })
                 )}
               </div>
 
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (manualBarcode.trim()) void handleDisplayScan(manualBarcode, true);
+                }}
+                className="w-full flex gap-2 pt-3"
+              >
+                <input
+                  type="text"
+                  value={manualBarcode}
+                  onChange={(event) => setManualBarcode(event.target.value)}
+                  placeholder="Enter product barcode manually"
+                  aria-label="Product barcode"
+                  className="min-w-0 flex-1 px-3 py-2 text-xs font-mono rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-teal-600"
+                />
+                <button
+                  type="submit"
+                  disabled={!manualBarcode.trim()}
+                  className="px-3 py-2 text-xs font-bold rounded-lg bg-teal-700 text-white disabled:opacity-40"
+                >
+                  Add item
+                </button>
+              </form>
+
               {/* Convenience 1-Click Barcode Test Buttons for Demo */}
               <div className="w-full pt-3 border-t border-gray-100">
                 <span className="text-[10px] font-bold uppercase text-gray-400 block mb-2 text-center">
@@ -563,7 +615,7 @@ export const DigitalDisplay: React.FC<DigitalDisplayProps> = ({ onExitDisplay })
                   {sampleQuickBarcodes.map(item => (
                     <button
                       key={item.code}
-                      onClick={() => handleDisplayScan(item.code)}
+                      onClick={() => handleDisplayScan(item.code, true)}
                       className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-teal-50 text-teal-800 border border-teal-200 hover:bg-teal-100 active:scale-95 transition-all"
                     >
                       + {item.name}
@@ -600,13 +652,10 @@ export const DigitalDisplay: React.FC<DigitalDisplayProps> = ({ onExitDisplay })
                       
                       {/* Photo Thumbnail + Name */}
                       <div className="flex items-center gap-3 min-w-0">
-                        <img
+                        <ProductImage
                           src={item.photo_url}
-                          alt=""
+                          alt={item.name}
                           className="w-14 h-14 rounded-xl object-cover border border-gray-200 shrink-0"
-                          onError={(e) => {
-                            (e.target as any).src = 'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=150&q=80';
-                          }}
                         />
                         <div className="min-w-0">
                           <p className="font-bold text-gray-900 truncate">{item.name}</p>
@@ -619,17 +668,16 @@ export const DigitalDisplay: React.FC<DigitalDisplayProps> = ({ onExitDisplay })
                       <div className="flex items-center gap-4 shrink-0">
                         <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-xl p-1">
                           <button
-                            onClick={async () => {
-                              await api.removeDisplayItem(basketId, item.barcode);
-                              setBasketItems(prev => prev.map(i => i.barcode === item.barcode ? { ...i, quantity: i.quantity - 1 } : i).filter(i => i.quantity > 0));
-                            }}
+                            type="button"
+                            onClick={() => void handleRemoveDisplayItem(item)}
                             className="w-7 h-7 rounded-lg bg-white shadow-sm flex items-center justify-center font-bold text-gray-700 hover:bg-gray-100"
                           >
                             <Minus className="w-3.5 h-3.5" />
                           </button>
                           <span className="font-black text-sm px-1.5">{item.quantity}</span>
                           <button
-                            onClick={() => handleDisplayScan(item.barcode)}
+                            type="button"
+                            onClick={() => handleDisplayScan(item.barcode, true)}
                             className="w-7 h-7 rounded-lg bg-white shadow-sm flex items-center justify-center font-bold text-gray-700 hover:bg-gray-100"
                           >
                             <Plus className="w-3.5 h-3.5" />

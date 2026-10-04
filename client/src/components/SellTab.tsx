@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Search, 
   Camera, 
@@ -34,21 +34,25 @@ export const SellTab: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
-  const fetchLedger = async () => {
+  const fetchLedger = useCallback(async () => {
     try {
       setLoading(true);
       const items = await api.getLedger(search);
       setLedger(items);
-    } catch (e: any) {
-      // ignore
+    } catch (error) {
+      addToast({
+        type: 'error',
+        title: 'Unable to load checkout ledger',
+        message: error instanceof Error ? error.message : 'Please try again.'
+      });
     } finally {
       setLoading(false);
     }
-  };
+  }, [addToast, search]);
 
   useEffect(() => {
-    fetchLedger();
-  }, [search]);
+    void fetchLedger();
+  }, [fetchLedger]);
 
   // Real-time synchronization over WebSocket (FR-15, FR-16)
   useEffect(() => {
@@ -62,10 +66,10 @@ export const SellTab: React.FC = () => {
       socket.off('sale:completed', handleSaleCompleted);
       socket.off('scan:created', handleScanCreated);
     };
-  }, []);
+  }, [fetchLedger]);
 
   // Universal Checkout Scan Handler (FR-16, 2.6)
-  const handleCheckoutScan = async (barcode: string) => {
+  const handleCheckoutScan = useCallback(async (barcode: string) => {
     const code = barcode.trim();
     if (!code) return;
 
@@ -100,7 +104,7 @@ export const SellTab: React.FC = () => {
         barcodeInputRef.current.focus();
       }
     }
-  };
+  }, [addToast, fetchLedger]);
 
   // Global Keyboard Wedge for Checkout Scanner
   useEffect(() => {
@@ -131,7 +135,7 @@ export const SellTab: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [handleCheckoutScan]);
 
   // Camera toggle
   const toggleCamera = async () => {
@@ -155,7 +159,7 @@ export const SellTab: React.FC = () => {
             },
             () => {}
           );
-        } catch (err) {
+        } catch {
           addToast({ type: 'error', title: 'Camera Error', message: 'Unable to access camera.' });
           setIsCameraActive(false);
         }

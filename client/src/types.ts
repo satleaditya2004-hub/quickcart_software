@@ -52,6 +52,13 @@ export interface LedgerItem {
   is_sold: boolean;
 }
 
+export interface ScanRecord {
+  id: string;
+  barcode: string;
+  product_name: string;
+  selling_price_snapshot: number;
+}
+
 export interface DisplayScanItem {
   id: string;
   barcode: string;

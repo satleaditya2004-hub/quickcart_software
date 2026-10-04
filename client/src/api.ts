@@ -3,6 +3,7 @@ import type {
   Product, 
   Unit, 
   LedgerItem, 
+  ScanRecord,
   DisplayScanItem,
   Purchase,
   CustomerSummary,
@@ -12,7 +13,9 @@ import type {
   LowStockAlertItem 
 } from './types';
 
-const API_BASE = 'http://localhost:5000';
+const API_BASE = import.meta.env.VITE_API_URL ||
+  `${window.location.protocol}//${window.location.hostname}:5000`;
+let refreshPromise: Promise<boolean> | null = null;
 
 function getAuthHeaders(): HeadersInit {
   const token = localStorage.getItem('quickkart_access_token');
@@ -22,7 +25,35 @@ function getAuthHeaders(): HeadersInit {
   };
 }
 
+function refreshSession(refreshToken: string): Promise<boolean> {
+  if (!refreshPromise) {
+    refreshPromise = (async () => {
+      try {
+        const refreshRes = await fetch(`${API_BASE}/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refreshToken })
+        });
+        if (!refreshRes.ok) return false;
+
+        const data = await refreshRes.json();
+        if (!data.accessToken || !data.refreshToken) return false;
+        localStorage.setItem('quickkart_access_token', data.accessToken);
+        localStorage.setItem('quickkart_refresh_token', data.refreshToken);
+        return true;
+      } catch (error) {
+        console.error('Unable to refresh QuickKart session:', error);
+        return false;
+      } finally {
+        refreshPromise = null;
+      }
+    })();
+  }
+  return refreshPromise;
+}
+
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  const accessToken = localStorage.getItem('quickkart_access_token');
   const res = await fetch(`${API_BASE}${endpoint}`, {
     ...options,
     headers: {
@@ -31,27 +62,17 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     }
   });
 
-  if (res.status === 401 && !endpoint.startsWith('/display/baskets/')) {
+  if (res.status === 401 && !endpoint.startsWith('/display/') && !endpoint.startsWith('/auth/')) {
+    if (accessToken && localStorage.getItem('quickkart_access_token') !== accessToken) {
+      return request<T>(endpoint, options);
+    }
     const refreshToken = localStorage.getItem('quickkart_refresh_token');
     if (refreshToken && endpoint !== '/auth/refresh' && endpoint !== '/auth/login') {
-      try {
-        const refreshRes = await fetch(`${API_BASE}/auth/refresh`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refreshToken })
-        });
-        if (refreshRes.ok) {
-          const data = await refreshRes.json();
-          localStorage.setItem('quickkart_access_token', data.accessToken);
-          localStorage.setItem('quickkart_refresh_token', data.refreshToken);
-          return request<T>(endpoint, options);
-        }
-      } catch (e) {
-        // ignore
-      }
+      if (await refreshSession(refreshToken)) return request<T>(endpoint, options);
     }
 
     localStorage.removeItem('quickkart_access_token');
+    localStorage.removeItem('quickkart_refresh_token');
     localStorage.removeItem('quickkart_user');
     window.dispatchEvent(new Event('quickkart:auth-change'));
     throw new Error('Unauthorized');
@@ -80,8 +101,12 @@ export const api = {
   },
 
   async logout(): Promise<void> {
+    const refreshToken = localStorage.getItem('quickkart_refresh_token');
     try {
-      await request('/auth/logout', { method: 'POST' });
+      await request('/auth/logout', {
+        method: 'POST',
+        body: JSON.stringify({ refreshToken })
+      });
     } finally {
       localStorage.removeItem('quickkart_access_token');
       localStorage.removeItem('quickkart_refresh_token');
@@ -150,6 +175,13 @@ export const api = {
   async getLedger(search: string = ''): Promise<LedgerItem[]> {
     const data = await request<{ records: LedgerItem[] }>(`/ledger?search=${encodeURIComponent(search)}`);
     return data.records;
+  },
+
+  async checkoutSale(barcode: string): Promise<{ record: ScanRecord; current_stock: number }> {
+    return request<{ record: ScanRecord; current_stock: number }>('/checkout', {
+      method: 'POST',
+      body: JSON.stringify({ barcode })
+    });
   },
 
   // Notifications

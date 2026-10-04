@@ -1,15 +1,13 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Play, 
   Square, 
   Search, 
   Camera, 
   Barcode, 
-  CheckCircle2, 
   Sparkles,
   Radio,
-  Activity,
-  Layers
+  Activity
 } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import type { Product, DisplayScanItem } from '../types';
@@ -17,6 +15,7 @@ import { api } from '../api';
 import { useToast } from '../context/ToastContext';
 import { sound } from '../socket';
 import { socket } from '../socket';
+import { ProductImage } from './ProductImage';
 
 export const ScanTab: React.FC = () => {
   const { addToast } = useToast();
@@ -37,7 +36,7 @@ export const ScanTab: React.FC = () => {
   const lastBarcodeRef = useRef<string>('');
   const keyBurstRef = useRef<{ buffer: string; lastKeyTime: number }>({ buffer: '', lastKeyTime: 0 });
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       const prods = await api.getProducts(search);
       setProducts(prods);
@@ -46,14 +45,18 @@ export const ScanTab: React.FC = () => {
       }
       const feed = await api.getScanFeed();
       setDisplayScans(feed);
-    } catch (e) {
-      // ignore
+    } catch (error) {
+      addToast({
+        type: 'error',
+        title: 'Unable to load scan data',
+        message: error instanceof Error ? error.message : 'Please try again.'
+      });
     }
-  };
+  }, [addToast, search, selectedProduct]);
 
   useEffect(() => {
-    loadData();
-  }, [search]);
+    void loadData();
+  }, [loadData]);
 
   // Real-time live feed from digital displays (C4, MF-9)
   useEffect(() => {
@@ -78,7 +81,7 @@ export const ScanTab: React.FC = () => {
   }, []);
 
   // Stock-in Barcode Scanned Handler
-  const handleStockInScan = async (barcode: string) => {
+  const handleStockInScan = useCallback(async (barcode: string) => {
     const code = barcode.trim();
     if (!code) return;
 
@@ -108,19 +111,31 @@ export const ScanTab: React.FC = () => {
 
       setBarcodeInput('');
 
-      const updated = await api.getProduct(selectedProduct.id);
-      setSelectedProduct(updated);
-      setProducts(prev => prev.map(p => p.id === updated.id ? updated : p));
-    } catch (err: any) {
+      try {
+        const updated = await api.getProduct(selectedProduct.id);
+        setSelectedProduct(updated);
+        setProducts(prev => prev.map(p => p.id === updated.id ? updated : p));
+      } catch (error) {
+        addToast({
+          type: 'warning',
+          title: 'Stock saved; refresh failed',
+          message: error instanceof Error ? error.message : 'Reload the product list to see the updated count.'
+        });
+      }
+    } catch (error: unknown) {
       sound.playError();
-      addToast({ type: 'error', title: 'Stock-in Failed', message: err.message });
+      addToast({
+        type: 'error',
+        title: 'Stock-in Failed',
+        message: error instanceof Error ? error.message : 'Please try scanning again.'
+      });
     } finally {
       setScanningLoading(false);
       if (barcodeInputRef.current) {
         barcodeInputRef.current.focus();
       }
     }
-  };
+  }, [addToast, selectedProduct]);
 
   // Keyboard wedge listener for USB / Bluetooth scanner
   useEffect(() => {
@@ -151,7 +166,7 @@ export const ScanTab: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedProduct]);
+  }, [handleStockInScan]);
 
   // Camera scanner toggle
   const toggleCameraScanner = async () => {
@@ -175,8 +190,12 @@ export const ScanTab: React.FC = () => {
             },
             () => {}
           );
-        } catch (err: any) {
-          addToast({ type: 'error', title: 'Camera unavailable', message: 'Unable to access camera.' });
+        } catch (error) {
+          addToast({
+            type: 'error',
+            title: 'Camera unavailable',
+            message: error instanceof Error ? error.message : 'Unable to access camera.'
+          });
           setIsCameraActive(false);
         }
       }, 200);
@@ -261,7 +280,7 @@ export const ScanTab: React.FC = () => {
                     }`}
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
-                      <img src={p.photo_url} alt="" className="w-8 h-8 rounded object-cover border border-gray-200" />
+                      <ProductImage src={p.photo_url} alt={p.name} className="w-8 h-8 rounded object-cover border border-gray-200" />
                       <div className="truncate">
                         <p className={`text-xs font-bold truncate ${isSelected ? 'text-teal-900 dark:text-teal-200' : 'text-gray-900 dark:text-white'}`}>
                           {p.name}
@@ -285,7 +304,7 @@ export const ScanTab: React.FC = () => {
             <div className="bg-white dark:bg-[#132220] rounded-xl border border-gray-200/80 dark:border-teal-900/40 p-4 shadow-sm space-y-4">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
-                  <img src={selectedProduct.photo_url} alt="" className="w-12 h-12 rounded-lg object-cover border border-teal-500/40" />
+                  <ProductImage src={selectedProduct.photo_url} alt={selectedProduct.name} className="w-12 h-12 rounded-lg object-cover border border-teal-500/40" />
                   <div>
                     <span className="text-[10px] font-bold uppercase tracking-wider text-teal-600 dark:text-teal-400">
                       Target Product

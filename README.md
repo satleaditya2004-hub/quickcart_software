@@ -6,6 +6,13 @@
 
 ## 🚀 Quick Start Guide
 
+Before starting the backend, create `server/.env` with two different random secrets (at least 32 characters each):
+```env
+JWT_SECRET=<random-secret-for-access-tokens>
+REFRESH_SECRET=<different-random-secret-for-refresh-tokens>
+```
+Generate each value with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. The server will not start if either secret is missing or too short.
+
 ### 1. Start the Backend Server
 In your terminal, navigate to the `server` directory and launch the API server:
 ```bash
@@ -22,17 +29,22 @@ npm run dev
 ```
 *The client runs at `http://localhost:5173`.*
 
+The client uses the API at `http://localhost:5000` by default (using the current hostname). For a different API origin, create `client/.env.local` and set `VITE_API_URL` to that origin, without a trailing slash.
+
 ---
 
 ## 👥 Demo Accounts & Roles
 
-QuickKart includes role-based access control with pre-seeded demo accounts. You can also click the quick role switcher buttons on the Login page:
+QuickKart includes role-based access control with pre-seeded demo accounts. The Login page's role switcher fills these credentials:
 
 | Role | Email | Password | Allowed Tabs |
 |---|---|---|---|
-| **Shop Owner** | `owner@quickkart.com` | `owner123` | **All 5 Tabs** (List, Scan, Data, Sell, Analysis) |
-| **Stock Staff** | `staff@quickkart.com` | `staff123` | **List, Scan, Data** |
-| **Cashier** | `cashier@quickkart.com` | `cashier123` | **Sell** (Checkout Terminal only) |
+| **Mall Admin** | `admin@quickkart.com` | `admin123` | List, Data, Sell, Analysis, Customers |
+| **Mall Staff** | `staff@quickkart.com` | `staff123` | List, Scan, Data, Sell, Analysis |
+
+There is no public user-registration form or API; this portal is limited to seeded admin and staff accounts. Customer checkout runs on the Digital Display and does not require a login.
+
+Product photos are stored as image URLs (uploads are not implemented). A missing or unreachable URL uses the built-in `client/public/product-placeholder.svg` image. The photo URL is optional when registering a product.
 
 ---
 

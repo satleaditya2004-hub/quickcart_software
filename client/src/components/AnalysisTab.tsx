@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   Sparkles, 
   TrendingUp, 
@@ -48,7 +48,7 @@ export const AnalysisTab: React.FC = () => {
   // Selected alert filter modal or inline filter
   const [activeAlertFilter, setActiveAlertFilter] = useState<string | null>(null);
 
-  const fetchAnalysisData = async () => {
+  const fetchAnalysisData = useCallback(async () => {
     try {
       setLoading(true);
       const [prodsData, sumData] = await Promise.all([
@@ -62,11 +62,11 @@ export const AnalysisTab: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [addToast, periodDays]);
 
   useEffect(() => {
-    fetchAnalysisData();
-  }, [periodDays]);
+    void fetchAnalysisData();
+  }, [fetchAnalysisData]);
 
   // Run Claude AI Deep Analysis (FR-18, Section 6.6)
   const handleRunAIAnalysis = async () => {
@@ -94,7 +94,7 @@ export const AnalysisTab: React.FC = () => {
         title: 'Claude AI Analysis Completed',
         message: 'Product-by-product verdicts and shop recommendations updated.'
       });
-    } catch (err: any) {
+    } catch {
       addToast({
         type: 'error',
         title: 'AI Analysis Failed',

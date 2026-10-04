@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   Plus, 
   Trash2, 
@@ -20,6 +20,7 @@ import type { Product } from '../types';
 import { api } from '../api';
 import { useToast } from '../context/ToastContext';
 import { socket } from '../socket';
+import { ProductImage } from './ProductImage';
 
 interface ListTabProps {
   initialInfoProductId?: string | null;
@@ -54,8 +55,14 @@ export const ListTab: React.FC<ListTabProps> = ({ initialInfoProductId, onClearI
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 8;
+  const [{ today, in7Days }] = useState(() => {
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+    const in7Days = new Date(now.getTime() + 7 * 24 * 3600 * 1000).toISOString().split('T')[0];
+    return { today, in7Days };
+  });
 
-  const fetchProducts = async () => {
+  const fetchProducts = useCallback(async () => {
     try {
       setLoading(true);
       const data = await api.getProducts(search);
@@ -65,30 +72,33 @@ export const ListTab: React.FC<ListTabProps> = ({ initialInfoProductId, onClearI
     } finally {
       setLoading(false);
     }
-  };
+  }, [addToast, search]);
 
   useEffect(() => {
-    fetchProducts();
-  }, [search]);
+    void fetchProducts();
+  }, [fetchProducts]);
 
   // Real-time synchronization
   useEffect(() => {
     const handleProductChange = () => fetchProducts();
     const handleUnitStocked = () => fetchProducts();
+    const handleUnitSold = () => fetchProducts();
     const handlePurchase = () => fetchProducts();
 
     socket.on('product:changed', handleProductChange);
     socket.on('unit:stocked', handleUnitStocked);
+    socket.on('unit:sold', handleUnitSold);
     socket.on('purchase:completed', handlePurchase);
     socket.on('units:released', handleProductChange);
 
     return () => {
       socket.off('product:changed', handleProductChange);
       socket.off('unit:stocked', handleUnitStocked);
+      socket.off('unit:sold', handleUnitSold);
       socket.off('purchase:completed', handlePurchase);
       socket.off('units:released', handleProductChange);
     };
-  }, []);
+  }, [fetchProducts]);
 
   useEffect(() => {
     if (initialInfoProductId) {
@@ -96,11 +106,19 @@ export const ListTab: React.FC<ListTabProps> = ({ initialInfoProductId, onClearI
       if (prod) {
         setInfoProduct(prod);
       } else {
-        api.getProduct(initialInfoProductId).then(p => setInfoProduct(p)).catch(() => {});
+        api.getProduct(initialInfoProductId)
+          .then(p => setInfoProduct(p))
+          .catch((error: unknown) => {
+            addToast({
+              type: 'error',
+              title: 'Unable to load product details',
+              message: error instanceof Error ? error.message : 'Please try again.'
+            });
+          });
       }
       if (onClearInfoProductId) onClearInfoProductId();
     }
-  }, [initialInfoProductId, products]);
+  }, [initialInfoProductId, products, onClearInfoProductId, addToast]);
 
   const toggleSelectRow = (id: string) => {
     setSelectedIds(prev => 
@@ -161,8 +179,8 @@ export const ListTab: React.FC<ListTabProps> = ({ initialInfoProductId, onClearI
     e.preventDefault();
     setFormError(null);
 
-    if (!formName.trim() || !formBarcode.trim() || !formPhotoUrl.trim() || !formMrp || !formSp || !formExp) {
-      setFormError('Name, Barcode, Photo URL, MRP, Selling Price, and Expiry Date are required.');
+    if (!formName.trim() || !formBarcode.trim() || !formMrp || !formSp || !formExp) {
+      setFormError('Name, Barcode, MRP, Selling Price, and Expiry Date are required.');
       return;
     }
 
@@ -347,8 +365,6 @@ export const ListTab: React.FC<ListTabProps> = ({ initialInfoProductId, onClearI
                   const isModerateStock = p.stock_count >= 5 && p.stock_count < 10;
                   const discountPct = p.mrp > 0 ? Math.round(((p.mrp - p.selling_price) / p.mrp) * 100) : 0;
 
-                  const today = new Date().toISOString().split('T')[0];
-                  const in7Days = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString().split('T')[0];
                   const isExpired = p.expiry_date < today;
                   const isExpiringSoon = !isExpired && p.expiry_date <= in7Days;
 
@@ -375,14 +391,10 @@ export const ListTab: React.FC<ListTabProps> = ({ initialInfoProductId, onClearI
                       {/* Photo Thumbnail */}
                       <td className="py-3 px-4">
                         <div className="w-10 h-10 rounded-lg overflow-hidden border border-gray-200 dark:border-teal-900/60 bg-gray-100 dark:bg-gray-800 shrink-0">
-                          <img
+                          <ProductImage
                             src={p.photo_url}
                             alt={p.name}
                             className="w-full h-full object-cover"
-                            onError={(e) => {
-                              // Fallback image on error
-                              (e.target as any).src = 'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=150&q=80';
-                            }}
                           />
                         </div>
                       </td>
@@ -575,14 +587,13 @@ export const ListTab: React.FC<ListTabProps> = ({ initialInfoProductId, onClearI
               {/* Product Photo URL & Instant Preview */}
               <div>
                 <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">
-                  Product Photo URL *
+                  Product Photo URL (optional)
                 </label>
                 <div className="flex gap-2">
                   <div className="relative flex-1">
                     <ImageIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                     <input
                       type="url"
-                      required
                       value={formPhotoUrl}
                       onChange={(e) => setFormPhotoUrl(e.target.value)}
                       placeholder="https://example.com/photo.jpg"
@@ -591,11 +602,7 @@ export const ListTab: React.FC<ListTabProps> = ({ initialInfoProductId, onClearI
                   </div>
                   {/* Photo Preview Thumbnail */}
                   <div className="w-12 h-9 rounded-lg border border-gray-200 dark:border-teal-900/60 overflow-hidden bg-gray-100 shrink-0">
-                    {formPhotoUrl ? (
-                      <img src={formPhotoUrl} alt="Preview" className="w-full h-full object-cover" />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-[10px] text-gray-400">No img</div>
-                    )}
+                    <ProductImage src={formPhotoUrl} alt="Product preview" className="w-full h-full object-cover" />
                   </div>
                 </div>
               </div>
@@ -724,7 +731,7 @@ export const ListTab: React.FC<ListTabProps> = ({ initialInfoProductId, onClearI
           <div className="bg-white dark:bg-[#132220] rounded-2xl shadow-2xl border border-gray-200 dark:border-teal-900/60 max-w-md w-full overflow-hidden">
             <div className="p-5 bg-teal-800 text-white flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <img src={infoProduct.photo_url} alt="" className="w-10 h-10 rounded-lg object-cover border border-teal-500/40" />
+                <ProductImage src={infoProduct.photo_url} alt={infoProduct.name} className="w-10 h-10 rounded-lg object-cover border border-teal-500/40" />
                 <div>
                   <span className="text-[10px] font-bold uppercase tracking-wider text-teal-300">Product Information</span>
                   <h3 className="text-base font-bold">{infoProduct.name}</h3>

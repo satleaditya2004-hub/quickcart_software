@@ -49,8 +49,8 @@ export const Header: React.FC<HeaderProps> = ({
       const data = await api.getNotifications();
       setLowStockAlerts(data.lowStock.items);
       setRecentPurchasesCount(data.recentPurchases.count);
-    } catch (e) {
-      // ignore
+    } catch (error) {
+      console.error('Unable to load notifications:', error);
     }
   };
 
@@ -69,12 +69,14 @@ export const Header: React.FC<HeaderProps> = ({
     socket.on('alert:purchase', handlePurchase);
     socket.on('stock:low', handleStockLow);
     socket.on('unit:stocked', fetchNotifications);
+    socket.on('unit:sold', fetchNotifications);
 
     return () => {
       socket.off('purchase:completed', handlePurchase);
       socket.off('alert:purchase', handlePurchase);
       socket.off('stock:low', handleStockLow);
       socket.off('unit:stocked', fetchNotifications);
+      socket.off('unit:sold', fetchNotifications);
     };
   }, []);
 

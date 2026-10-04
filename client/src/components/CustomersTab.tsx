@@ -1,22 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
-  Users, 
   Search, 
-  Calendar, 
-  CreditCard, 
   Phone, 
-  Barcode, 
   CheckCircle2, 
-  Clock, 
   ChevronRight, 
   X,
-  FileText,
-  UserCheck,
-  ShoppingBag,
-  TrendingUp,
   Receipt
 } from 'lucide-react';
-import type { Purchase, PurchaseItem, CustomerSummary } from '../types';
+import type { Purchase, CustomerSummary } from '../types';
 import { api } from '../api';
 import { useToast } from '../context/ToastContext';
 import { socket } from '../socket';
@@ -35,7 +26,7 @@ export const CustomersTab: React.FC = () => {
   // View mode: 'all' purchases list vs 'repeat' customers analytics
   const [viewMode, setViewMode] = useState<'all' | 'repeat'>('all');
 
-  const fetchPurchases = async () => {
+  const fetchPurchases = useCallback(async () => {
     try {
       setLoading(true);
       const data = await api.getCustomers(search);
@@ -45,11 +36,11 @@ export const CustomersTab: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [addToast, search]);
 
   useEffect(() => {
-    fetchPurchases();
-  }, [search]);
+    void fetchPurchases();
+  }, [fetchPurchases]);
 
   // Live WebSocket updates when a customer finishes payment on display (C10, MF-13)
   useEffect(() => {
@@ -66,13 +57,18 @@ export const CustomersTab: React.FC = () => {
     return () => {
       socket.off('purchase:completed', handlePurchaseCompleted);
     };
-  }, []);
+  }, [addToast, fetchPurchases]);
 
   const openPurchaseDetail = async (p: Purchase) => {
     try {
       const detailed = await api.getCustomerDetail(p.id);
       setSelectedPurchase(detailed);
-    } catch (e) {
+    } catch (error) {
+      addToast({
+        type: 'warning',
+        title: 'Showing saved purchase summary',
+        message: error instanceof Error ? error.message : 'Full purchase details are unavailable.'
+      });
       setSelectedPurchase(p);
     }
   };
@@ -296,6 +292,11 @@ export const CustomersTab: React.FC = () => {
           </div>
 
           <div className="divide-y divide-gray-100 dark:divide-teal-900/30">
+            {repeatLoading && (
+              <p className="p-3 text-center text-xs text-gray-500" role="status">
+                Loading customer purchase history...
+              </p>
+            )}
             {repeatCustomerList.map((cust) => (
               <div 
                 key={cust.phone}
