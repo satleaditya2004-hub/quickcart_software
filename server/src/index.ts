@@ -1,3 +1,5 @@
+import path from 'path';
+import { fileURLToPath } from 'url';
 import express from 'express';
 import http from 'http';
 import { Server as SocketIOServer } from 'socket.io';
@@ -1206,6 +1208,13 @@ app.get('/health', (req, res) => {
   return res.json({ status: 'ok', version: '2.0', app: 'QuickKart Shopping Mall & Display Engine' });
 });
 
+// Serve the built frontend (one link for the whole app)
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const clientDist = path.join(__dirname, '../../client/dist');
+app.use(express.static(clientDist));
+app.get('/{*splat}', (_req, res) => {
+  res.sendFile(path.join(clientDist, 'index.html'));
+});
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`QuickKart Mall & Display Engine running on http://localhost:${PORT}`);
