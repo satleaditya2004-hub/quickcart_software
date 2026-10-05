@@ -4,7 +4,10 @@ import fs from 'fs';
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 
-const dbPath = path.resolve(process.cwd(), 'quickkart.db');
+const dbPath = process.env.DB_PATH
+  ? path.resolve(process.env.DB_PATH)
+  : path.resolve(process.cwd(), 'quickkart.db');
+fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 export const db = new Database(dbPath);
 
 // Enable WAL mode and foreign keys for high performance and concurrency
@@ -220,7 +223,11 @@ function configureDeploymentAdmin() {
     `).run(uuidv4(), configuredEmail, passwordHash);
   }
 
-  console.log('Deployment admin account configured from environment.');
+  db.prepare(`
+    UPDATE users SET active = 0
+    WHERE lower(email) IN ('admin@quickkart.com', 'staff@quickkart.com')
+      AND lower(email) != ?
+  `).run(configuredEmail);
 }
 
 function seedVersion2Data() {
